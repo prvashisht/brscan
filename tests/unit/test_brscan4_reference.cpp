@@ -223,6 +223,78 @@ TEST(Brscan4ReadNextRecord, ReturnsFullFrameAtomically) {
   EXPECT_EQ(out[0], 0x80);
 }
 
+
+TEST(Brscan4ReadNextRecord, RecoversOneByteOverdeclaredPayloadAtReadBoundary) {
+  Brscan4ReadCache cache{};
+  brscan4_cache_reset(&cache);
+
+  /*
+   * First record declares four payload bytes but actually contributes
+   * only AA BB CC. The next frame's 0x42 header is the fourth byte the
+   * naive reader would consume. Split the stream across two reads at
+   * the same point observed on DCP-L2510D hardware.
+   */
+  FakeReader reader{{
+      {13, Hex({
+          0x42, 0x07, 0x00,
+          0x01, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00,
+          0x04, 0x00,
+          0xAA,
+      })},
+      {18, Hex({
+          0xBB, 0xCC,
+          0x42, 0x07, 0x00,
+          0x01, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00,
+          0x03, 0x00,
+          0x11, 0x22, 0x33,
+          0x80,
+      })},
+  }};
+
+  unsigned char out[64] = {};
+
+  ASSERT_EQ(
+      brscan4_read_next_record(&cache, FakeRead, &reader, out, sizeof(out)),
+      15);
+
+  EXPECT_EQ(
+      std::vector<uint8_t>(out, out + 15),
+      Hex({
+          0x42, 0x07, 0x00,
+          0x01, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00,
+          0x03, 0x00,
+          0xAA, 0xBB, 0xCC,
+      }));
+
+  unsigned int record_len = 0;
+  unsigned int payload_offset = 0;
+  unsigned int payload_len = 0;
+
+  ASSERT_EQ(
+      brscan4_record_length(
+          out,
+          15,
+          &record_len,
+          &payload_offset,
+          &payload_len),
+      1);
+
+  EXPECT_EQ(record_len, 15u);
+  EXPECT_EQ(payload_len, 3u);
+
+  ASSERT_EQ(
+      brscan4_read_next_record(&cache, FakeRead, &reader, out, sizeof(out)),
+      15);
+
+  EXPECT_EQ(out[0], 0x42);
+
+  ASSERT_EQ(
+      brscan4_read_next_record(&cache, FakeRead, &reader, out, sizeof(out)),
+      1);
+
+  EXPECT_EQ(out[0], 0x80);
+}
+
 TEST(Brscan4ReadNextRecord, DoesNotExposePartialFrame) {
   Brscan4ReadCache cache{};
   brscan4_cache_reset(&cache);

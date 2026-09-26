@@ -171,5 +171,48 @@ int brscan4_read_next_record(Brscan4ReadCache *cache,
 	if (got != (int)payload_len)
 		return 0;
 
+	/*
+	 * Some brscan4 mono streams can overstate one record's payload by one
+	 * byte at a transport/cache boundary. In that case the final byte
+	 * consumed as payload is actually the next 0x40/0x42 frame header.
+	 *
+	 * Recover only when that swallowed byte plus the still-cached bytes
+	 * form a complete, structurally valid wrapper-7 next frame. This keeps
+	 * the workaround narrow and avoids treating an ordinary payload byte
+	 * that happens to equal 0x40/0x42 as a record boundary.
+	 */
+	if (payload_len > 0 &&
+	    cache->len >= 11 &&
+	    cache->len < BRSCAN4_READ_CACHE_SIZE) {
+		unsigned char swallowed = dst[payload_offset + payload_len - 1];
+
+		if ((swallowed == 0x40 || swallowed == 0x42) &&
+		    cache->data[0] == 0x07 &&
+		    cache->data[1] == 0x00) {
+			unsigned int next_data_len =
+			    (unsigned int)cache->data[9] |
+			    ((unsigned int)cache->data[10] << 8);
+			unsigned int next_record_len = 12u + next_data_len;
+
+			if (next_record_len <= cache->len + 1u) {
+				unsigned int corrected_payload_len = payload_len - 1u;
+
+				/*
+				 * The returned record must agree with its shortened
+				 * byte count. PageScan reparses this field later.
+				 */
+				dst[payload_offset - 2] =
+				    (unsigned char)(corrected_payload_len & 0xffu);
+				dst[payload_offset - 1] =
+				    (unsigned char)((corrected_payload_len >> 8) & 0xffu);
+
+				memmove(cache->data + 1, cache->data, cache->len);
+				cache->data[0] = swallowed;
+				cache->len++;
+				return (int)record_len - 1;
+			}
+		}
+	}
+
 	return (int)record_len;
 }
