@@ -7,7 +7,12 @@ extern "C" {
 
 #define BRSCAN4_READ_CACHE_SIZE 0x20400
 #define BRSCAN4_MAX_REQUEST_SIZE 0x20200
-#define BRSCAN4_MAX_USB_READ_SIZE 0x7FFF
+/*
+ * Keep the USB read chunk below the reference 0x7FFF ceiling while
+ * ending on a 512-byte bulk-packet boundary. DCP-L2510D captures showed
+ * one missing stream byte after every saturated 0x7FFF USB read.
+ */
+#define BRSCAN4_MAX_USB_READ_SIZE 0x7E00
 
 typedef int (*brscan4_read_fn)(void *ctx, unsigned char *dst, int size);
 

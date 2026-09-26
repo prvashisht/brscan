@@ -143,7 +143,7 @@ TEST(Brscan4Cache, ExactReadKeepsResidualBytes) {
   EXPECT_EQ(reader.index, 1u);
 }
 
-TEST(Brscan4Cache, CapsUsbReadsAtReferenceMaximum) {
+TEST(Brscan4Cache, CapsUsbReadsAtPacketAlignedMaximum) {
   Brscan4ReadCache cache{};
   brscan4_cache_reset(&cache);
   FakeReader reader{{{0, {}}}};
@@ -151,6 +151,9 @@ TEST(Brscan4Cache, CapsUsbReadsAtReferenceMaximum) {
 
   EXPECT_EQ(brscan4_cache_read(&cache, FakeRead, &reader, out, 0x20200), 0);
   ASSERT_FALSE(reader.requested_sizes.empty());
+  EXPECT_EQ(BRSCAN4_MAX_USB_READ_SIZE, 0x7E00);
+  EXPECT_LT(BRSCAN4_MAX_USB_READ_SIZE, 0x8000);
+  EXPECT_EQ(BRSCAN4_MAX_USB_READ_SIZE % 512, 0);
   EXPECT_EQ(reader.requested_sizes.front(), BRSCAN4_MAX_USB_READ_SIZE);
 }
 
