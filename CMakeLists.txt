@@ -39,6 +39,7 @@ add_library(sane-brother SHARED
 	libsane-brother/brother_misc.c
 	libsane-brother/brother_modelinf.c
 	libsane-brother/brother_netdev.c
+	libsane-brother/brother_output_frame.c
 	libsane-brother/brother_scanner.c
 	libsane-brother/sane_strstatus.c
 	libsane-brother/sanei_config.c

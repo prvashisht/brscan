@@ -53,6 +53,7 @@
 #include "brother_scanner.h"
 #include "brother_brscan4.h"
 #include "brother_color.h"
+#include "brother_output_frame.h"
 
 #ifdef NO39_DEBUG
 #include <sys/time.h>
@@ -73,6 +74,11 @@ static Brscan4ReadCache brscan4_read_cache;
 #endif
 
 LONG lRealY = 0;
+
+#if BRSANESUFFIX == 2
+/* Raster bytes already handed to sane_read for the current page. */
+static BrotherOutputFrame g_output_frame;
+#endif
 
 HANDLE	hGray;			//Gray table from brgray.bin
 
@@ -217,12 +223,35 @@ FreeScanDecDll( Brother_Scanner *this )
  *	OUT		None						      *
  *									      *
  ******************************************************************************/
+#if BRSANESUFFIX == 2
+static void
+output_frame_arm( Brother_Scanner *this )
+{
+#if COLOR_BW != 0 || COLOR_ED != 1 || COLOR_TG != 3 || \
+    COLOR_FUL != 5 || COLOR_FUL_NOCM != 6
+#error COLOR_* values drifted from brother_output_frame_row_bytes()
+#endif
+	int64_t row_bytes;
+
+	row_bytes = brother_output_frame_row_bytes(
+		(int)this->devScanInfo.wColorType,
+		(int64_t)this->scanInfo.ScanAreaSize.lWidth,
+		(int64_t)this->scanInfo.ScanAreaByte.lWidth);
+	brother_output_frame_begin(&g_output_frame, row_bytes,
+		(int64_t)this->scanInfo.ScanAreaSize.lHeight);
+}
+#endif
+
 BOOL
 ScanStart( Brother_Scanner *this )
 {
 	BOOL  bResult;
 
 	int   rc;
+
+#if BRSANESUFFIX == 2
+	brother_output_frame_reset(&g_output_frame);
+#endif
 
 	WriteLog( "" );
 	WriteLog( ">>>>> Start Scanning >>>>>" );
@@ -444,6 +473,10 @@ ScanStart( Brother_Scanner *this )
 	else {
 		return SANE_STATUS_INVAL;
 	}
+
+#if BRSANESUFFIX == 2
+	output_frame_arm(this);
+#endif
 
 	nPageScanCnt = 0;	// clear the debug-counter
 
@@ -939,8 +972,25 @@ PageScan( Brother_Scanner *this, char *lpFwBuf, int nMaxLen, int *lpFwLen )
 		this->scanState.bScanning=FALSE;
 		this->scanState.bCanceled=FALSE;
 		this->scanState.nPageCnt = 0;
+		brother_output_frame_reset(&g_output_frame);
 
 		return rc;
+	}
+
+	/* A finished frame completes on the read after its last bytes.
+	 * That keeps the existing GOOD-then-EOF sequence. */
+	if (brother_output_frame_exhausted(&g_output_frame)) {
+		*lpFwLen = 0;
+		this->scanState.bEOF = TRUE;
+		this->scanState.bScanning = FALSE;
+		brother_output_frame_reset(&g_output_frame);
+		WriteLog("PageScan output frame exhausted");
+		return SANE_STATUS_EOF;
+	}
+	if (!brother_output_frame_armed(&g_output_frame)) {
+		*lpFwLen = 0;
+		WriteLog("PageScan output frame is not armed");
+		return SANE_STATUS_IO_ERROR;
 	}
 
 	nPageScanCnt++;
@@ -1276,18 +1326,24 @@ PageScan( Brother_Scanner *this, char *lpFwBuf, int nMaxLen, int *lpFwLen )
 		nAnswer = this->scanState.iProcessEnd;
 	}
 
-	/* Copy the image data stored in the transmission-keep buffer */
+	/* Copy decoded raster into the SANE buffer, limited to the
+	 * advertised frame. Bytes already inside the frame are kept for
+	 * a later sane_read. Decoded bytes past the frame are dropped
+	 * here and are not put back into the transmission buffer.
+	 * USB/protocol records were consumed above and are not trimmed. */
 	WriteLog( "<<<<< PageScan FwTempBuffLength = %d", FwTempBuffLength );
+	{
+		int src_len = FwTempBuffLength;
+		int dst_len = 0;
+		int discarded;
 
-	if ( FwTempBuffLength > nMaxLen )
-		*lpFwLen = nMaxLen;
-	else
-		*lpFwLen = FwTempBuffLength;
-
-	FwTempBuffLength -= *lpFwLen ;
-
-	memmove( lpFwBuf, lpFwTempBuff, *lpFwLen);	// copy the data from the transmission-keep buffer to transmission buffer
-	memmove( lpFwTempBuff, lpFwTempBuff+*lpFwLen, FwTempBuffLength ); // move the rest data to the buffer top
+		discarded = brother_output_frame_emit(&g_output_frame,
+			lpFwTempBuff, &src_len, lpFwBuf, nMaxLen, &dst_len);
+		*lpFwLen = dst_len;
+		FwTempBuffLength = src_len;
+		if (discarded > 0)
+			WriteLog("PageScan output-frame cap discarded %d raster bytes", discarded);
+	}
 
 	rc = SANE_STATUS_GOOD;
 
@@ -1304,30 +1360,30 @@ PageScan( Brother_Scanner *this, char *lpFwBuf, int nMaxLen, int *lpFwLen )
 			if( lRealY < this->scanInfo.ScanAreaSize.lHeight ){
 				// the case that it becomes page-end status before the received data fills  the area of specified size.
 				int nHeightLen = this->scanInfo.ScanAreaSize.lHeight - lRealY;
-				int nSize = this->scanInfo.ScanAreaByte.lWidth * nHeightLen; 
+				int width = this->scanInfo.ScanAreaByte.lWidth;
+				int nSize = width * nHeightLen;
 				int nMaxSize = nMaxLen - *lpFwLen;
-				int nMaxLine;
 				int nVal;
+				int nWrote;
 
 				if (this->devScanInfo.wColorType < COLOR_TG)
 					nVal = 0x00;
 				else
 					nVal = 0xFF;
 
-				if ( nSize < nMaxSize ) {
-					memset(lpFwBuf+*lpFwLen, nVal, nSize);
-					*lpFwLen += nSize;
-					lRealY += nHeightLen;
-					WriteLog( "PageScan AddSpace End lRealY = %d, nHeightLen = %d nSize = %d nMaxSize = %d *lpFwLen = %d",
-					lRealY, nHeightLen, nSize, nMaxSize, *lpFwLen );
-				}
-				else {
-					memset(lpFwBuf+*lpFwLen, nVal, nMaxSize);
-					nMaxLine = nMaxSize / this->scanInfo.ScanAreaByte.lWidth;
-					*lpFwLen += this->scanInfo.ScanAreaByte.lWidth * nMaxLine;
-					lRealY += nMaxLine;
-					WriteLog( "PageScan AddSpace lRealY = %d, nHeightLen = %d nSize = %d nMaxSize = %d *lpFwLen = %d",
-					lRealY, nHeightLen, nSize, nMaxSize, *lpFwLen );
+				nWrote = brother_output_frame_pad(&g_output_frame,
+					nSize, nMaxSize, width);
+				if (nWrote > 0) {
+					memset(lpFwBuf+*lpFwLen, nVal, nWrote);
+					*lpFwLen += nWrote;
+					lRealY += nWrote / width;
+					if (nWrote == nSize && nSize < nMaxSize) {
+						WriteLog( "PageScan AddSpace End lRealY = %d, nHeightLen = %d nSize = %d nMaxSize = %d *lpFwLen = %d",
+						lRealY, nHeightLen, nSize, nMaxSize, *lpFwLen );
+					} else {
+						WriteLog( "PageScan AddSpace lRealY = %d, nHeightLen = %d nSize = %d nMaxSize = %d *lpFwLen = %d",
+						lRealY, nHeightLen, nSize, nMaxSize, *lpFwLen );
+					}
 				}
 			}
 		}
@@ -1390,6 +1446,13 @@ PageScan( Brother_Scanner *this, char *lpFwBuf, int nMaxLen, int *lpFwLen )
 
 	if(nAnswer != SCAN_DUPLEX_NORMAL)
 	  nFwLenTotal += *lpFwLen;
+
+	/* GOOD keeps the account, including the read that delivers the
+	 * last in-frame bytes. The next PageScan then returns EOF.
+	 * Duplex retry is not a terminal frame. Every other status ends
+	 * the page, so the next scan cannot inherit this budget. */
+	if (rc != SANE_STATUS_GOOD && rc != SANE_STATUS_DUPLEX_ADVERSE)
+		brother_output_frame_reset(&g_output_frame);
 
 	WriteLog( "<<<<< PageScan End <<<<< nFwLenTotal = %d lpFwLen = %d ",nFwLenTotal, *lpFwLen);
 
@@ -1915,6 +1978,10 @@ AbortPageScan( Brother_Scanner *this )
 {
 	WriteLog( ">>>>> AbortPageScan Start >>>>>" );
 
+#if BRSANESUFFIX == 2
+	brother_output_frame_reset(&g_output_frame);
+#endif
+
 	//
 	// Send the cancel command
 	//
@@ -1942,6 +2009,9 @@ AbortPageScan( Brother_Scanner *this )
 void
 ScanEnd( Brother_Scanner *this )
 {
+#if BRSANESUFFIX == 2
+    brother_output_frame_reset(&g_output_frame);
+#endif
     this->scanState.nPageCnt = 0;
     bTxScanCmd = FALSE;		// Clear the begining-of-scan flag
 
