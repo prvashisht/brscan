@@ -28,13 +28,13 @@ int64_t brother_output_frame_delivered(const BrotherOutputFrame *frame);
 int64_t brother_output_frame_budget(const BrotherOutputFrame *frame);
 
 /*
- * Row stride of the frame sane_get_parameters announces.
+ * Row stride sane_get_parameters announces for this color mode.
  *
  * color_type uses the brother.h COLOR_* codes (BW=0, ED=1, TG=3,
- * 24-bit color=5, color without matching=6). Other modes use
- * stored_stride, which is scanInfo.ScanAreaByte.lWidth. When both the
- * SANE formula and the stored stride are positive, the smaller one is
- * used so the frame cannot exceed either geometry.
+ * 24-bit color=5, color without matching=6). Those modes return the
+ * SANE formula even when stored_stride disagrees; the caller must not
+ * shrink the frame to the decoder stride. Modes with no SANE formula
+ * use stored_stride (scanInfo.ScanAreaByte.lWidth) explicitly.
  */
 int64_t brother_output_frame_row_bytes(int color_type, int64_t pixels,
 				       int64_t stored_stride);
@@ -54,11 +54,12 @@ int brother_output_frame_emit(BrotherOutputFrame *frame,
 
 /*
  * Bytes of short-page padding that still fit in the advertised frame
- * and in this read. The returned count is added to the delivered total.
- * A pad that fits in max_out is returned in full. A pad that does not
- * is split on whole rows, matching the historical AddSpace split.
+ * and in this read. want is the full shortfall in bytes and may exceed
+ * INT_MAX; the returned count is at most max_out and is added to the
+ * delivered total. A pad that fits in max_out is returned in full. A
+ * pad that does not is split on whole rows, matching AddSpace.
  */
-int brother_output_frame_pad(BrotherOutputFrame *frame, int want,
-			     int max_out, int row_bytes);
+int brother_output_frame_pad(BrotherOutputFrame *frame, int64_t want,
+			     int max_out, int64_t row_bytes);
 
 #endif

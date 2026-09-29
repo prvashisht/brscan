@@ -67,6 +67,7 @@ Start: 2.4.2001
 #include "brother_advini.h"
 #include "brother_log.h"
 #include "brother_bugchk.h"
+#include "brother_output_frame.h"
 
 extern int g_sane_debug_dll;
 
@@ -940,18 +941,21 @@ sane_get_parameters (SANE_Handle handle, SANE_Parameters *p)
     case COLOR_FUL_NOCM:
       p->format=SANE_FRAME_RGB;
       p->depth=8;
-      p->bytes_per_line=p->pixels_per_line*3;
+      p->bytes_per_line=(SANE_Int)brother_output_frame_row_bytes(
+		this->uiSetting.wColorType, p->pixels_per_line, 0);
       break;
     case COLOR_TG:
       p->format=SANE_FRAME_GRAY;
       p->depth=8;
-      p->bytes_per_line=p->pixels_per_line;
+      p->bytes_per_line=(SANE_Int)brother_output_frame_row_bytes(
+		this->uiSetting.wColorType, p->pixels_per_line, 0);
       break;
     case COLOR_BW:
     case COLOR_ED:
       p->format=SANE_FRAME_GRAY;
       p->depth=1;
-      p->bytes_per_line=(p->pixels_per_line+7)/8;
+      p->bytes_per_line=(SANE_Int)brother_output_frame_row_bytes(
+		this->uiSetting.wColorType, p->pixels_per_line, 0);
       break;
     }
   WriteLog( "<<< sane_get_parameters end (bytes_per_line=%d, lines=%d) >>> ",p->bytes_per_line, p->lines);

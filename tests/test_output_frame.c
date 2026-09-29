@@ -19,6 +19,7 @@
  */
 #include "brother_output_frame.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,10 +89,10 @@ static void test_row_bytes(void)
 	CHECK(brother_output_frame_row_bytes(COLOR_TG, 2480, 2480) == 2480);
 	CHECK(brother_output_frame_row_bytes(COLOR_FUL, 100, 300) == 300);
 	CHECK(brother_output_frame_row_bytes(COLOR_FUL_NOCM, 8, 24) == 24);
-	/* Decoder stride narrower than the SANE formula: do not expect more. */
-	CHECK(brother_output_frame_row_bytes(COLOR_TG, 100, 80) == 80);
-	/* Decoder stride wider than SANE: do not exceed the announcement. */
+	/* A narrower or wider decoder stride does not change the SANE row. */
+	CHECK(brother_output_frame_row_bytes(COLOR_TG, 100, 80) == 100);
 	CHECK(brother_output_frame_row_bytes(COLOR_TG, 100, 120) == 100);
+	CHECK(brother_output_frame_row_bytes(COLOR_BW, 192, 16) == 24);
 	/* Modes sane_get_parameters does not switch on keep the stored stride. */
 	CHECK(brother_output_frame_row_bytes(COLOR_DTH, 100, 17) == 17);
 	CHECK(brother_output_frame_row_bytes(COLOR_256, 64, 64) == 64);
@@ -562,6 +563,22 @@ static void test_g_reset(void)
 	CHECK(memcmp(dst, saved, 20) == 0);
 }
 
+static void test_pad_wider_than_int(void)
+{
+	BrotherOutputFrame frame;
+	int64_t budget = (int64_t)INT_MAX + 4096;
+	int wrote;
+
+	memset(&frame, 0, sizeof(frame));
+	brother_output_frame_begin(&frame, budget, 1);
+	wrote = brother_output_frame_pad(&frame, (int64_t)INT_MAX + 100,
+					  4096, 1024);
+	CHECK(wrote == 4096);
+	CHECK(brother_output_frame_delivered(&frame) == 4096);
+	CHECK(!brother_output_frame_exhausted(&frame));
+	CHECK(brother_output_frame_remaining(&frame) == budget - 4096);
+}
+
 static void test_rgb_and_narrow_read(void)
 {
 	BrotherOutputFrame frame;
@@ -599,6 +616,7 @@ int main(void)
 	test_e_buffer_boundary();
 	test_f_second_scan();
 	test_g_reset();
+	test_pad_wider_than_int();
 	test_rgb_and_narrow_read();
 	if (g_failed) {
 		fprintf(stderr, "output-frame tests failed\n");

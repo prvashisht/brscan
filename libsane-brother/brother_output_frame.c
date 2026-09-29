@@ -82,11 +82,11 @@ int64_t brother_output_frame_row_bytes(int color_type, int64_t pixels,
 		}
 	}
 
-	if (announced <= 0)
-		return stored_stride > 0 ? stored_stride : 0;
-	if (stored_stride > 0 && stored_stride < announced)
-		return stored_stride;
-	return announced;
+	/* Known SANE modes keep the announced stride. A narrower decoder
+	 * row must not shrink the frame scanimage was told to expect. */
+	if (announced > 0)
+		return announced;
+	return stored_stride > 0 ? stored_stride : 0;
 }
 
 static void frame_take(BrotherOutputFrame *frame, int avail, int max_out,
@@ -157,12 +157,12 @@ int brother_output_frame_emit(BrotherOutputFrame *frame,
 	return discard;
 }
 
-int brother_output_frame_pad(BrotherOutputFrame *frame, int want,
-			     int max_out, int row_bytes)
+int brother_output_frame_pad(BrotherOutputFrame *frame, int64_t want,
+			     int max_out, int64_t row_bytes)
 {
 	int64_t remain;
 	int64_t authorized;
-	int wrote;
+	int64_t wrote;
 
 	if (!frame || !frame->armed || frame->delivered >= frame->budget)
 		return 0;
@@ -176,16 +176,18 @@ int brother_output_frame_pad(BrotherOutputFrame *frame, int want,
 	if (authorized <= 0)
 		return 0;
 
-	if (authorized < max_out) {
-		wrote = (int)authorized;
+	if (authorized < (int64_t)max_out) {
+		wrote = authorized;
+	} else if (row_bytes > (int64_t)max_out) {
+		wrote = 0;
 	} else {
-		wrote = row_bytes * (max_out / row_bytes);
-		if ((int64_t)wrote > authorized)
-			wrote = (int)authorized;
+		wrote = row_bytes * ((int64_t)max_out / row_bytes);
+		if (wrote > authorized)
+			wrote = authorized;
 	}
-	if (wrote <= 0)
+	if (wrote <= 0 || wrote > (int64_t)max_out)
 		return 0;
 
 	frame->delivered += wrote;
-	return wrote;
+	return (int)wrote;
 }
